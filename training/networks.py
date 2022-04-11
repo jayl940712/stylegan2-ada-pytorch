@@ -297,7 +297,6 @@ class SynthesisLayer(torch.nn.Module):
                 noise = input_noise * self.noise_strength
         if self.use_noise and noise_mode == 'const':
             noise = self.noise_const * self.noise_strength
-        print(noise.shape)
         flip_weight = (self.up == 1) # slightly faster
         x = modulated_conv2d(x=x, weight=self.weight, styles=styles, noise=noise, up=self.up,
             padding=self.padding, resample_filter=self.resample_filter, flip_weight=flip_weight, fused_modconv=fused_modconv)
@@ -398,15 +397,15 @@ class SynthesisBlock(torch.nn.Module):
 
         # Main layers.
         if self.in_channels == 0:
-            x = self.conv1(x, next(w_iter), input_noise=noise, fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv1(x, next(w_iter), input_noise=noise[-1], fused_modconv=fused_modconv, **layer_kwargs)
         elif self.architecture == 'resnet':
             y = self.skip(x, gain=np.sqrt(0.5))
-            x = self.conv0(x, next(w_iter), input_noise=noise, fused_modconv=fused_modconv, **layer_kwargs)
-            x = self.conv1(x, next(w_iter), input_noise=noise, fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
+            x = self.conv0(x, next(w_iter), input_noise=noise[0], fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv1(x, next(w_iter), input_noise=noise[1], fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
             x = y.add_(x)
         else:
-            x = self.conv0(x, next(w_iter), input_noise=noise, fused_modconv=fused_modconv, **layer_kwargs)
-            x = self.conv1(x, next(w_iter), input_noise=noise, fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv0(x, next(w_iter), input_noise=noise[0], fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv1(x, next(w_iter), input_noise=noise[1], fused_modconv=fused_modconv, **layer_kwargs)
 
         # ToRGB.
         if img is not None:
@@ -460,7 +459,6 @@ class SynthesisNetwork(torch.nn.Module):
     def forward(self, ws, input_noise=None, **block_kwargs):
         block_ws = []
         block_noise = []
-        print(input_noise)
         with torch.autograd.profiler.record_function('split_ws'):
             misc.assert_shape(ws, [None, self.num_ws, self.w_dim])
             ws = ws.to(torch.float32)
@@ -469,11 +467,10 @@ class SynthesisNetwork(torch.nn.Module):
                 block = getattr(self, f'b{res}')
                 block_ws.append(ws.narrow(1, w_idx, block.num_conv + block.num_torgb))
                 if input_noise == None:
-                    block_noise.append(None)
+                    block_noise.append([None, None])
                 else:
                     block_noise.append(input_noise[f'b{res}'])
                 w_idx += block.num_conv
-        print(block_noise)
         x = img = None
         for res, cur_ws, noise in zip(self.block_resolutions, block_ws, block_noise):
             block = getattr(self, f'b{res}')

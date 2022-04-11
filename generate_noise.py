@@ -20,6 +20,29 @@ import torch
 
 import legacy
 
+class Noise:
+    def __init__(self, block_resolutions, device='cpu'):
+        self.block_resolutions = block_resolutions
+        self.num = (1, )  + (2, ) * (len(self.block_resolutions) - 1)
+        self.device = device
+        self.size = sum([(self.block_resolutions[i] ** 2) * self.num[i] for i in range(len(self.num))])
+    def generate(self, batch=1, input=None):
+        if input == None:
+            noise = torch.randn(batch*self.size, device=self.device)
+        else:
+            noise = input
+            assert noise.shape == (batch*self.size, )
+        block_noise = {}
+        idx = 0
+        for num, res in zip(self.num, self.block_resolutions):
+            block_noise[f'b{res}'] = []
+            for _ in range(num):
+                length = batch * res * res
+                cur = noise[idx: idx+length].reshape(-1, 1, res, res)
+                idx += length
+                block_noise[f'b{res}'].append(cur)
+        return noise, block_noise
+
 #----------------------------------------------------------------------------
 
 def num_range(s: str) -> List[int]:
@@ -112,13 +135,15 @@ def generate_images(
         if class_idx is not None:
             print ('warn: --class=lbl ignored when running on an unconditional network')
 
-    upsampler = torch.nn.Upsample(scale_factor=8, mode='bicubic')
+    upsampler = torch.nn.Upsample(scale_factor=8, mode='bicubic', align_corners=False)
+    noise_module = Noise(G.synthesis.block_resolutions, device)
     # Generate images.
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
-        for i in range(1000):
+        for i in range(1):
             z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-            img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
+            noise, noise_block = noise_module.generate()
+            img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode, input_noise=noise_block)
             img = upsampler(img)
             img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
             PIL.Image.fromarray(img[0,:,:,0].cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}.png')
