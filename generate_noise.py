@@ -40,7 +40,7 @@ def num_range(s: str) -> List[int]:
 @click.option('--seeds', type=num_range, help='List of random seeds')
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
-@click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
+@click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='random', show_default=True)
 @click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
 def generate_images(
@@ -116,11 +116,12 @@ def generate_images(
     # Generate images.
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
-        z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-        img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
-        img = upsampler(img)
-        img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-        PIL.Image.fromarray(img[0,:,:,0].cpu().numpy(), 'L').save(f'{outdir}/seed{seed:04d}.png')
+        for i in range(1000):
+            z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+            img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
+            img = upsampler(img)
+            img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
+            PIL.Image.fromarray(img[0,:,:,0].cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}.png')
 
 
 #----------------------------------------------------------------------------

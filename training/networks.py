@@ -283,7 +283,7 @@ class SynthesisLayer(torch.nn.Module):
             self.noise_strength = torch.nn.Parameter(torch.zeros([]))
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
 
-    def forward(self, x, w, noise_mode='random', fused_modconv=True, gain=1):
+    def forward(self, x, w, input_noise=None, noise_mode='random', fused_modconv=True, gain=1):
         assert noise_mode in ['random', 'const', 'none']
         in_resolution = self.resolution // self.up
         misc.assert_shape(x, [None, self.weight.shape[1], in_resolution, in_resolution])
@@ -291,10 +291,13 @@ class SynthesisLayer(torch.nn.Module):
 
         noise = None
         if self.use_noise and noise_mode == 'random':
-            noise = torch.randn([x.shape[0], 1, self.resolution, self.resolution], device=x.device) * self.noise_strength
+            if input_noise == None:
+                noise = torch.randn([x.shape[0], 1, self.resolution, self.resolution], device=x.device) * self.noise_strength
+            else:
+                noise = input_noise * self.noise_strength
         if self.use_noise and noise_mode == 'const':
             noise = self.noise_const * self.noise_strength
-
+        print(noise.shape)
         flip_weight = (self.up == 1) # slightly faster
         x = modulated_conv2d(x=x, weight=self.weight, styles=styles, noise=noise, up=self.up,
             padding=self.padding, resample_filter=self.resample_filter, flip_weight=flip_weight, fused_modconv=fused_modconv)
@@ -376,7 +379,7 @@ class SynthesisBlock(torch.nn.Module):
             self.skip = Conv2dLayer(in_channels, out_channels, kernel_size=1, bias=False, up=2,
                 resample_filter=resample_filter, channels_last=self.channels_last)
 
-    def forward(self, x, img, ws, force_fp32=False, fused_modconv=None, **layer_kwargs):
+    def forward(self, x, img, ws, noise=None, force_fp32=False, fused_modconv=None, **layer_kwargs):
         misc.assert_shape(ws, [None, self.num_conv + self.num_torgb, self.w_dim])
         w_iter = iter(ws.unbind(dim=1))
         dtype = torch.float16 if self.use_fp16 and not force_fp32 else torch.float32
@@ -395,15 +398,15 @@ class SynthesisBlock(torch.nn.Module):
 
         # Main layers.
         if self.in_channels == 0:
-            x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv1(x, next(w_iter), input_noise=noise, fused_modconv=fused_modconv, **layer_kwargs)
         elif self.architecture == 'resnet':
             y = self.skip(x, gain=np.sqrt(0.5))
-            x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
-            x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
+            x = self.conv0(x, next(w_iter), input_noise=noise, fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv1(x, next(w_iter), input_noise=noise, fused_modconv=fused_modconv, gain=np.sqrt(0.5), **layer_kwargs)
             x = y.add_(x)
         else:
-            x = self.conv0(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
-            x = self.conv1(x, next(w_iter), fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv0(x, next(w_iter), input_noise=noise, fused_modconv=fused_modconv, **layer_kwargs)
+            x = self.conv1(x, next(w_iter), input_noise=noise, fused_modconv=fused_modconv, **layer_kwargs)
 
         # ToRGB.
         if img is not None:
@@ -454,8 +457,10 @@ class SynthesisNetwork(torch.nn.Module):
                 self.num_ws += block.num_torgb
             setattr(self, f'b{res}', block)
 
-    def forward(self, ws, **block_kwargs):
+    def forward(self, ws, input_noise=None, **block_kwargs):
         block_ws = []
+        block_noise = []
+        print(input_noise)
         with torch.autograd.profiler.record_function('split_ws'):
             misc.assert_shape(ws, [None, self.num_ws, self.w_dim])
             ws = ws.to(torch.float32)
@@ -463,12 +468,16 @@ class SynthesisNetwork(torch.nn.Module):
             for res in self.block_resolutions:
                 block = getattr(self, f'b{res}')
                 block_ws.append(ws.narrow(1, w_idx, block.num_conv + block.num_torgb))
+                if input_noise == None:
+                    block_noise.append(None)
+                else:
+                    block_noise.append(input_noise[f'b{res}'])
                 w_idx += block.num_conv
-
+        print(block_noise)
         x = img = None
-        for res, cur_ws in zip(self.block_resolutions, block_ws):
+        for res, cur_ws, noise in zip(self.block_resolutions, block_ws, block_noise):
             block = getattr(self, f'b{res}')
-            x, img = block(x, img, cur_ws, **block_kwargs)
+            x, img = block(x, img, cur_ws, noise, **block_kwargs)
         return img
 
 #----------------------------------------------------------------------------
