@@ -28,22 +28,44 @@ from util import html
 import torch
 import numpy as np
 
+from torch.distributions.normal import Normal
+
 try:
     import wandb
 except ImportError:
     print('Warning: wandb package cannot be found. The option "--use_wandb" will result in error.')
     
-
+def attack_style(z, noise_module, G, model, device, epochs=100):
+    upsampler = torch.nn.Upsample(scale_factor=8, mode='bicubic')
+    G.eval(), model.eval()
+    label = torch.zeros([1, G.c_dim], device=device)
+    optimizer = torch.optim.Adam([z], lr=0.01)
+    z.requires_grad = True
+    norm_dist = Normal(torch.tensor([0.0], device=device), torch.tensor([1.0], device=device))
+    for i in range(epochs):
+        optimizer.zero_grad()
+        img = G(z, label, truncation_psi=1.0, noise_mode='const')
+        img = upsampler(img)
+        img = (img.clamp(-1, 1) + 1) * 0.5
+        model.real_high_res = img
+        loss = model.forward_uncertainty() - 10 * norm_dist.log_prob(z).mean()
+        tot_loss = loss
+        tot_loss.backward()
+        optimizer.step()
+        print(i, loss.item())#, noise.grad)
+    return z
+    
+    
 def attack_noise(z, noise_module, G, model, device, epochs=100):
     noise, noise_block = noise_module.generate()
     initial_noise_block = noise_block
     upsampler = torch.nn.Upsample(scale_factor=8, mode='bicubic')
     G.eval(), model.eval()
     label = torch.zeros([1, G.c_dim], device=device)
-    zeros = torch.zeros_like(noise, device=device)
-    L1_loss = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam([noise], lr=0.001)
+    optimizer = torch.optim.Adam([noise], lr=0.01)
     noise.requires_grad = True
+    original = None
+    norm_dist = Normal(torch.tensor([0.0], device=device), torch.tensor([1.0], device=device))
     for i in range(epochs):
         optimizer.zero_grad()
         noise_block = noise_module.transform_noise(noise)
@@ -51,12 +73,13 @@ def attack_noise(z, noise_module, G, model, device, epochs=100):
         img = upsampler(img)
         img = (img.clamp(-1, 1) + 1) * 0.5
         model.real_high_res = img
-        normalization = L1_loss(noise, zeros) * 0.0001
-        loss = -model.forward_attack() 
-        tot_loss = loss #+ normalization
+        loss = -model.forward_attack(original) - 10 * norm_dist.log_prob(noise).mean()
+        if original is None:
+            original = model.real_resist.detach()
+        tot_loss = loss 
         tot_loss.backward()
         optimizer.step()
-        print(i, loss.item(), normalization.item())#, noise.grad)
+        print(i, loss.item())#, noise.grad)
     print(noise.max())
     return initial_noise_block, noise_block
 
@@ -121,7 +144,7 @@ def generate_images():
     """
 
     outdir = './out'
-    seeds = [0,1]
+    seeds = [0,1,2,3,4,5,6,7,8,9]
     truncation_psi = 1.0
     noise_mode = 'random'
     network_pkl = './stylegan_model/network-snapshot-025000.pkl'
@@ -153,7 +176,29 @@ def generate_images():
         
     noise_module = Noise(G.synthesis.block_resolutions, device)
     label = torch.zeros([1, G.c_dim], device=device)
-    upsampler = torch.nn.Upsample(scale_factor=8, mode='nearest')
+    upsampler = torch.nn.Upsample(scale_factor=8, mode='bicubic')
+    
+    # Generate images.
+    for i, seed in enumerate(seeds):
+        print('Generating image for seed %d (%d/%d) ...' % (seed, i, len(seeds)))
+        z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+        z = attack_style(z, noise_module, G, model, device=device, epochs=100)
+        
+        #noise, noise_block = noise_module.generate()
+        img = G(z, label, truncation_psi=truncation_psi, noise_mode='const')
+        img = upsampler(img)
+        img_ori = (img.clamp(-1, 1) + 1) * 0.5
+        model.real_high_res = img_ori
+        model.forward_F()
+        a, b = model.get_F_criterion(None)
+        mask_output_ori = (model.real_mask[0,0,:,:] * 255).to(torch.uint8)
+        mask_golden_ori = (model.real_resist[0,0,:,:] * 255).to(torch.uint8)
+        print(a, b, "attac")
+        img_output_ori = (img_ori[0,0,:,:] * 255).to(torch.uint8)
+        PIL.Image.fromarray(img_output_ori.detach().cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}_img_ori.png')
+        PIL.Image.fromarray(mask_output_ori.detach().cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}_ori.png')
+        PIL.Image.fromarray(mask_golden_ori.detach().cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}_golden_ori.png')
+    return
     # Generate images.
     for i, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, i, len(seeds)))
