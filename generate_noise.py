@@ -10,6 +10,7 @@
 
 import os, sys
 import re
+import copy
 from typing import List, Optional
 
 import dnnlib
@@ -61,20 +62,40 @@ def attack_style(z, noise_module, G, model, device, epochs=100):
         img = (img.clamp(-1, 1) + 1) * 0.5
         model.real_high_res = img
         loss = model.forward_uncertainty() - 100 * norm_dist.log_prob(z).mean()
+        #loss = -model.forward_attack(None)
         tot_loss = loss
         tot_loss.backward()
         optimizer.step()
         #print(i, loss.item())#, noise.grad)
-    return z
+    return img
+
+def attack_img(img, model, epochs=100):
+    optimizer = torch.optim.Adam([img], lr=0.1)
+    img.requires_grad = True
+    original=None
+    #norm_dist = Normal(torch.tensor([0.0], device=device), torch.tensor([1.0], device=device))
+    for i in range(epochs):
+        optimizer.zero_grad()
+        x_img = (img.clamp(-1, 1) + 1) * 0.5
+        model.real_high_res = x_img
+        loss = -model.forward_attack(original) #- 100 * norm_dist.log_prob(z).mean()
+        #loss = model.forward_uncertainty()
+        if original == None:
+            original = model.real_mask_img.detach()
+        tot_loss = loss
+        tot_loss.backward(retain_graph=True)
+        optimizer.step()
+        #print(i, loss.item())#, noise.grad)
+    return img
     
     
-def attack_noise(z, noise_module, G, model, device, epochs=10):
+def attack_noise(z, noise_module, G, model, device, epochs=100):
     noise, noise_block = noise_module.generate()
-    initial_noise_block = noise_block
+    initial_noise_block = copy.deepcopy(noise_block)
     upsampler = torch.nn.Upsample(scale_factor=8, mode='bicubic')
     G.eval(), model.eval()
     label = torch.zeros([1, G.c_dim], device=device)
-    optimizer = torch.optim.Adam([noise], lr=0.01)
+    optimizer = torch.optim.Adam([noise], lr=0.1)
     noise.requires_grad = True
     original = None
     norm_dist = Normal(torch.tensor([0.0], device=device), torch.tensor([1.0], device=device))
@@ -85,10 +106,10 @@ def attack_noise(z, noise_module, G, model, device, epochs=10):
         img = upsampler(img)
         img = (img.clamp(-1, 1) + 1) * 0.5
         model.real_high_res = img
-        #loss = -model.forward_attack(original) - 100 * norm_dist.log_prob(noise).mean()
-        #if original is None:
-        #    original = model.real_mask_img.detach()
-        loss = model.forward_uncertainty() - 100 * norm_dist.log_prob(z).mean()
+        loss = -model.forward_attack(original) - 100 * norm_dist.log_prob(noise).mean()
+        if original is None:
+            original = model.real_mask_img.detach()
+        #loss = model.forward_uncertainty() - 100 * norm_dist.log_prob(z).mean()
         tot_loss = loss 
         tot_loss.backward()
         optimizer.step()
@@ -156,7 +177,7 @@ def generate_images():
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
     """
 
-    outdir = './out'
+    outdir = './out2'
     #seeds = [0,1,2,3,4,5,6,7,8,9]
     seeds = [0,1,2]
     truncation_psi = 1.0
@@ -193,15 +214,49 @@ def generate_images():
     upsampler = torch.nn.Upsample(scale_factor=8, mode='bicubic')
     
     # Generate images.
-    def attack_style_loop():
+    
+    def generate_img(num):
+        seeds = list(range(num)) 
         for i, seed in enumerate(seeds):
             print('Generating image for seed %d (%d/%d) ...' % (seed, i, len(seeds)))
             z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-            z = attack_style(z, noise_module, G, model, device=device, epochs=100)
-
-            #noise, noise_block = noise_module.generate()
             img = G(z, label, truncation_psi=truncation_psi, noise_mode='const')
             img = upsampler(img)
+            img_ori = (img.clamp(-1, 1) + 1) * 0.5
+            img_output_ori = (img_ori[0,0,:,:] * 255).to(torch.uint8)
+            PIL.Image.fromarray(img_output_ori.detach().cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}_img_ori.png')
+            
+    def attack_style_loop(num):
+        seeds = list(range(num)) 
+        for i, seed in enumerate(seeds):
+            print('Generating image for seed %d (%d/%d) ...' % (seed, i, len(seeds)))
+            z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+            img_ori = attack_style(z, noise_module, G, model, device=device, epochs=100)
+
+            #noise, noise_block = noise_module.generate()
+            #img = G(z, label, truncation_psi=truncation_psi, noise_mode='const')
+            #img = upsampler(img)
+            #img_ori = (img.clamp(-1, 1) + 1) * 0.5
+            model.real_high_res = img_ori
+            model.forward_F()
+            a, b = model.get_F_criterion(None)
+            mask_output_ori = (model.real_mask[0,0,:,:] * 255).to(torch.uint8)
+            mask_golden_ori = (model.real_resist[0,0,:,:] * 255).to(torch.uint8)
+            print(a, b, "attac")
+            img_output_ori = (img_ori[0,0,:,:] * 255).to(torch.uint8)
+            PIL.Image.fromarray(img_output_ori.detach().cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}_img_ori.png')
+            #PIL.Image.fromarray(mask_output_ori.detach().cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}_ori.png')
+            #PIL.Image.fromarray(mask_golden_ori.detach().cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}_golden_ori.png')
+        
+    def attack_img_loop(num):
+        seeds = list(range(num)) 
+        for i, seed in enumerate(seeds):
+            print('Generating image for seed %d (%d/%d) ...' % (seed, i, len(seeds)))
+            z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+            #noise, noise_block = noise_module.generate()
+            img = G(z, label, truncation_psi=truncation_psi, noise_mode='const')
+            img = upsampler(img).detach()
+            img = attack_img(img, model, epochs=100)
             img_ori = (img.clamp(-1, 1) + 1) * 0.5
             model.real_high_res = img_ori
             model.forward_F()
@@ -213,15 +268,15 @@ def generate_images():
             PIL.Image.fromarray(img_output_ori.detach().cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}_img_ori.png')
             PIL.Image.fromarray(mask_output_ori.detach().cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}_ori.png')
             PIL.Image.fromarray(mask_golden_ori.detach().cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}_golden_ori.png')
-        
+            
     # Generate images.
-    def attack_noise_loop():
+    def attack_noise_loop(num):
+        seeds = list(range(num)) 
         for i, seed in enumerate(seeds):
             print('Generating image for seed %d (%d/%d) ...' % (seed, i, len(seeds)))
             z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
             initial_noise_block, noise_block = attack_noise(z, noise_module, G, model, device=device, epochs=100)
 
-            _, initial_noise_block = noise_module.generate()
             #noise, noise_block = noise_module.generate()
             img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode, input_noise=initial_noise_block)
             img = upsampler(img)
@@ -259,9 +314,11 @@ def generate_images():
             print(fg, bg, "golden diff")
             fg, bg = calculate_iou(mask_output, mask_output_ori)
             print(fg, bg, "predict diff")
-            
-    #attack_style_loop()
-    attack_noise_loop()
+      
+    generate_img(50)
+    #attack_img_loop(10)
+    #attack_style_loop(100)
+    #attack_noise_loop(10)
 
 
 
