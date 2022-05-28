@@ -52,7 +52,7 @@ def attack_style(z, noise_module, G, model, device, epochs=100):
     upsampler = torch.nn.Upsample(scale_factor=8, mode='bicubic')
     G.eval(), model.eval()
     label = torch.zeros([1, G.c_dim], device=device)
-    optimizer = torch.optim.Adam([z], lr=0.01)
+    optimizer = torch.optim.Adam([z], lr=0.1)
     z.requires_grad = True
     norm_dist = Normal(torch.tensor([0.0], device=device), torch.tensor([1.0], device=device))
     for i in range(epochs):
@@ -61,7 +61,7 @@ def attack_style(z, noise_module, G, model, device, epochs=100):
         img = upsampler(img)
         img = (img.clamp(-1, 1) + 1) * 0.5
         model.real_high_res = img
-        loss = model.forward_uncertainty() - 100 * norm_dist.log_prob(z).mean()
+        loss = model.forward_uncertainty() - 1.0 * norm_dist.log_prob(z).mean()
         #loss = -model.forward_attack(None)
         tot_loss = loss
         tot_loss.backward()
@@ -70,7 +70,7 @@ def attack_style(z, noise_module, G, model, device, epochs=100):
     return img
 
 def attack_img(img, model, epochs=100):
-    optimizer = torch.optim.Adam([img], lr=0.1)
+    optimizer = torch.optim.Adam([img], lr=0.01)
     img.requires_grad = True
     original=None
     #norm_dist = Normal(torch.tensor([0.0], device=device), torch.tensor([1.0], device=device))
@@ -106,7 +106,7 @@ def attack_noise(z, noise_module, G, model, device, epochs=100):
         img = upsampler(img)
         img = (img.clamp(-1, 1) + 1) * 0.5
         model.real_high_res = img
-        loss = -model.forward_attack(original) - 100 * norm_dist.log_prob(noise).mean()
+        loss = -model.forward_attack(original) - 1.0 * norm_dist.log_prob(noise).mean()
         if original is None:
             original = model.real_mask_img.detach()
         #loss = model.forward_uncertainty() - 100 * norm_dist.log_prob(z).mean()
@@ -177,7 +177,7 @@ def generate_images():
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
     """
 
-    outdir = './out2'
+    outdir = './out'
     #seeds = [0,1,2,3,4,5,6,7,8,9]
     seeds = [0,1,2]
     truncation_psi = 1.0
@@ -223,6 +223,9 @@ def generate_images():
             img = G(z, label, truncation_psi=truncation_psi, noise_mode='const')
             img = upsampler(img)
             img_ori = (img.clamp(-1, 1) + 1) * 0.5
+            if img_ori.sum() < 256 * 256 // 100:
+                print("Image too small skipped.")
+                continue
             img_output_ori = (img_ori[0,0,:,:] * 255).to(torch.uint8)
             PIL.Image.fromarray(img_output_ori.detach().cpu().numpy(), 'L').save(f'{outdir}/seed{i:04d}_img_ori.png')
             
@@ -256,7 +259,7 @@ def generate_images():
             #noise, noise_block = noise_module.generate()
             img = G(z, label, truncation_psi=truncation_psi, noise_mode='const')
             img = upsampler(img).detach()
-            img = attack_img(img, model, epochs=100)
+            img = attack_img(img, model, epochs=20)
             img_ori = (img.clamp(-1, 1) + 1) * 0.5
             model.real_high_res = img_ori
             model.forward_F()
@@ -315,9 +318,9 @@ def generate_images():
             fg, bg = calculate_iou(mask_output, mask_output_ori)
             print(fg, bg, "predict diff")
       
-    generate_img(50)
-    #attack_img_loop(10)
-    #attack_style_loop(100)
+    generate_img(2000)
+    #attack_img_loop(50)
+    #attack_style_loop(2000)
     #attack_noise_loop(10)
 
 
