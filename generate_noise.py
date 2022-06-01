@@ -60,7 +60,7 @@ def attack_style(z, noise_module, G, model, device, epochs=100):
         img = G(z, label, truncation_psi=1.0, noise_mode='const')
         img = upsampler(img)
         img = (img.clamp(-1, 1) + 1) * 0.5
-        model.real_high_res = img
+        model.mask = img
         loss = model.forward_uncertainty() - 1.0 * norm_dist.log_prob(z).mean()
         #loss = -model.forward_attack(None)
         tot_loss = loss
@@ -77,7 +77,7 @@ def attack_img(img, model, epochs=100):
     for i in range(epochs):
         optimizer.zero_grad()
         x_img = (img.clamp(-1, 1) + 1) * 0.5
-        model.real_high_res = x_img
+        model.mask = x_img
         loss = -model.forward_attack(original) #- 100 * norm_dist.log_prob(z).mean()
         #loss = model.forward_uncertainty()
         if original == None:
@@ -177,7 +177,7 @@ def generate_images():
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
     """
 
-    outdir = './out'
+    outdir = './out_attk'
     #seeds = [0,1,2,3,4,5,6,7,8,9]
     seeds = [0,1,2]
     truncation_psi = 1.0
@@ -234,14 +234,14 @@ def generate_images():
         for i, seed in enumerate(seeds):
             print('Generating image for seed %d (%d/%d) ...' % (seed, i, len(seeds)))
             z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-            img_ori = attack_style(z, noise_module, G, model, device=device, epochs=100)
+            img_ori = attack_style(z, noise_module, G, model, device=device)
 
             #noise, noise_block = noise_module.generate()
             #img = G(z, label, truncation_psi=truncation_psi, noise_mode='const')
             #img = upsampler(img)
             #img_ori = (img.clamp(-1, 1) + 1) * 0.5
             model.real_high_res = img_ori
-            model.forward_F()
+            model.forward()
             a, b = model.get_F_criterion(None)
             mask_output_ori = (model.real_mask[0,0,:,:] * 255).to(torch.uint8)
             mask_golden_ori = (model.real_resist[0,0,:,:] * 255).to(torch.uint8)
@@ -262,7 +262,7 @@ def generate_images():
             img = attack_img(img, model, epochs=20)
             img_ori = (img.clamp(-1, 1) + 1) * 0.5
             model.real_high_res = img_ori
-            model.forward_F()
+            model.forward()
             a, b = model.get_F_criterion(None)
             mask_output_ori = (model.real_mask[0,0,:,:] * 255).to(torch.uint8)
             mask_golden_ori = (model.real_resist[0,0,:,:] * 255).to(torch.uint8)
@@ -285,7 +285,7 @@ def generate_images():
             img = upsampler(img)
             img_ori = (img.clamp(-1, 1) + 1) * 0.5
             model.real_high_res = img_ori
-            model.forward_F()
+            model.forward()
             a, b = model.get_F_criterion(None)
             mask_output_ori = (model.real_mask[0,0,:,:] * 255).to(torch.uint8)
             mask_golden_ori = (model.real_resist[0,0,:,:] * 255).to(torch.uint8)
@@ -294,7 +294,7 @@ def generate_images():
             img = upsampler(img)
             img = (img.clamp(-1, 1) + 1) * 0.5
             model.real_high_res = img
-            model.forward_F()
+            model.forward()
             a, b = model.get_F_criterion(None)
             print(a, b, "attack")
             img_output = (img[0,0,:,:] * 255).to(torch.uint8)
@@ -318,9 +318,9 @@ def generate_images():
             fg, bg = calculate_iou(mask_output, mask_output_ori)
             print(fg, bg, "predict diff")
       
-    generate_img(2000)
+    #generate_img(500)
     #attack_img_loop(50)
-    #attack_style_loop(2000)
+    attack_style_loop(50)
     #attack_noise_loop(10)
 
 

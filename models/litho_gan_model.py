@@ -234,7 +234,7 @@ class LithoGANModel(BaseModel):
         self.iou_fg = intersection_fg.sum()/union_fg.sum()
         self.iou_bg = (1-union_fg).sum()/(1-intersection_fg).sum()
         self.iou = (self.iou_bg + self.iou_fg)/2.0
-        return loss, self.iou_fg
+        return loss, self.iou
     
     def optimize_parameters(self):
         # Iterative train GAN and F
