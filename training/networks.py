@@ -94,6 +94,7 @@ class FullyConnectedLayer(torch.nn.Module):
         activation      = 'linear', # Activation function: 'relu', 'lrelu', etc.
         lr_multiplier   = 1,        # Learning rate multiplier.
         bias_init       = 0,        # Initial value for the additive bias.
+        residual        = False,     # If connected in residual
     ):
         super().__init__()
         self.activation = activation
@@ -101,7 +102,8 @@ class FullyConnectedLayer(torch.nn.Module):
         self.bias = torch.nn.Parameter(torch.full([out_features], np.float32(bias_init))) if bias else None
         self.weight_gain = lr_multiplier / np.sqrt(in_features)
         self.bias_gain = lr_multiplier
-
+        self.residual = residual
+        
     def forward(self, x):
         w = self.weight.to(x.dtype) * self.weight_gain
         b = self.bias
@@ -111,11 +113,15 @@ class FullyConnectedLayer(torch.nn.Module):
                 b = b * self.bias_gain
 
         if self.activation == 'linear' and b is not None:
-            x = torch.addmm(b.unsqueeze(0), x, w.t())
+            out = torch.addmm(b.unsqueeze(0), x, w.t())
         else:
-            x = x.matmul(w.t())
-            x = bias_act.bias_act(x, b, act=self.activation)
-        return x
+            out = x.matmul(w.t())
+            out = bias_act.bias_act(out, b, act=self.activation)
+            
+        if self.residual:
+            return out + x
+        
+        return out
 
 #----------------------------------------------------------------------------
 
@@ -205,7 +211,10 @@ class MappingNetwork(torch.nn.Module):
         for idx in range(num_layers):
             in_features = features_list[idx]
             out_features = features_list[idx + 1]
-            layer = FullyConnectedLayer(in_features, out_features, activation=activation, lr_multiplier=lr_multiplier)
+            if in_features == out_features:
+                layer = FullyConnectedLayer(in_features, out_features, activation=activation, lr_multiplier=lr_multiplier, residual=True)
+            else:
+                layer = FullyConnectedLayer(in_features, out_features, activation=activation, lr_multiplier=lr_multiplier)
             setattr(self, f'fc{idx}', layer)
 
         if num_ws is not None and w_avg_beta is not None:
