@@ -49,7 +49,7 @@ class LithoAugModel(BaseModel):
         # specify the training losses you want to print out. The training/test scripts will call <BaseModel.get_current_losses>
         self.loss_names = ['F']
         # specify the images you want to save/display. The training/test scripts will call <BaseModel.get_current_visuals>
-        self.visual_names = ['real_resist', 'real_mask_img']
+        self.visual_names = ['real_resist', 'real_mask_img'] #, 'union', 'inter']
         # specify the models you want to save to the disk. The training/test scripts will call <BaseModel.save_networks> and <BaseModel.load_networks>
         self.model_names = ['F']
         # define networks (both generator and discriminator)
@@ -65,6 +65,8 @@ class LithoAugModel(BaseModel):
         else:
             self.kernel = Kernel()
             self.cl = CUDA_LITHO(self.kernel)
+            self.MSELoss = torch.nn.MSELoss()
+            self.logSoftmax = torch.nn.LogSoftmax(dim=1)
 
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -108,12 +110,31 @@ class LithoAugModel(BaseModel):
     def forward(self):
         self.real_mask = self.netF(self.mask)
         self.real_mask_img = torch.argmax(self.real_mask, dim=1, keepdim=True)
-        
-    def forward_uncertainty(self):
+
+    def forward_attack(self, original=None):
         self.forward()
-        return torch.absolute(self.real_mask[...,0] - self.real_mask[...,1]).mean()
+        if original is None:
+            self.real_resist = self.simulate(self.mask)
+        else:
+            self.real_resist = original
+        self.loss_F = self.criterionLitho(self.real_mask, self.to_one_hot(self.real_resist))  
+        return self.loss_F
+        
+    def forward_uncertainty(self, loss_type):
+        self.forward()
+        if loss_type == 'houdini':
+            x = torch.mul( self.real_mask[...,0], self.real_mask[...,1])
+            return -x.mean() 
+        elif loss_type == 'logprob':
+            x, _ =  torch.max( self.logSoftmax(self.real_mask), dim=1)
+            return -x.mean()
+        elif loss_type == 'mse':
+            return self.MSELoss(self.real_mask[...,0], self.real_mask[...,1])
+        else:
+            assert False, "{} not supported".format(loss_type)
         
     def backward(self):
+        #print(self.real_mask.shape, self.to_one_hot(self.real_resist).shape)
         self.loss_F = self.criterionLitho(self.real_mask, self.to_one_hot(self.real_resist))  
         self.loss_F.backward()
         
@@ -129,10 +150,14 @@ class LithoAugModel(BaseModel):
         self.real_resist = self.real_resist.int()
         intersection_fg = (self.real_mask & self.real_resist).float()
         union_fg = (self.real_mask | self.real_resist).float()
-        self.iou_fg = intersection_fg.sum()/union_fg.sum()
+        #self.inter = (self.real_mask ^ self.real_resist).float()
+        #self.union = union_fg
+        #self.iou_fg = intersection_fg.sum()/union_fg.sum()
+        self.iou_fg = (intersection_fg.sum(dim=(1,2,3)) + 1e-3  )/  (union_fg.sum(dim=(1,2,3)) + 1e-3 )
+        #print(self.iou_fg)
         #self.iou_bg = (1-union_fg).sum()/(1-intersection_fg).sum()
         #self.iou = (self.iou_bg + self.iou_fg)/2.0
-        return loss, self.iou_fg    
+        return loss, self.iou_fg.mean()
     
     def optimize_parameters(self):
         self.set_requires_grad(self.netF, True)
