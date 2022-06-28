@@ -512,6 +512,7 @@ class Generator(torch.nn.Module):
     def forward(self, z, c, truncation_psi=1, truncation_cutoff=None, **synthesis_kwargs):
         ws = self.mapping(z, c, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)
         img = self.synthesis(ws, **synthesis_kwargs)
+        img = bias_act.bias_act(img, act='tanh')
         return img
 
 #----------------------------------------------------------------------------

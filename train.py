@@ -173,6 +173,7 @@ def setup_training_loop_kwargs(
         spec.gamma = 0.0002 * (res ** 2) / spec.mb * 50 # heuristic formula
         spec.ema = spec.mb * 10 / 32
 
+    # including modified arguments
     args.G_reg_interval = None
     args.D_reg_interval = None
     args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=128, w_dim=128, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict())
